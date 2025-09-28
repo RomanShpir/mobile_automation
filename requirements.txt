@@ -9,3 +9,6 @@ Appium-Python-Client>=3.1.0
 pytest-xdist>=3.3.1
 # HTML report generation
 pytest-html>=4.1.1
+
+# Timeout handling for tests
+pytest-timeout>=2.3.1
