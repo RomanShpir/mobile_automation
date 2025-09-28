@@ -1,5 +1,6 @@
 # conftest.py
 import os
+import re
 import time
 import tempfile
 import zipfile
@@ -93,34 +94,63 @@ def appium_capabilities():
         # "appWaitForLaunch": True,
     }
 
+def _detect_launcher_activity(pkg: str) -> str:
+    """
+    Ask the system which LAUNCHER activity starts this package.
+    Returns fully qualified activity name (no leading dot).
+    """
+    # Example output contains: cmp=tv.twitch.android.app/.core.LandingActivity
+    cmd = ["adb", "shell", "cmd", "package", "resolve-activity",
+           "-c", "android.intent.category.LAUNCHER", pkg]
+    out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
+
+    m = re.search(r"cmp=([\w.]+)/(\S+)", out)
+    if not m:
+        raise RuntimeError(f"Cannot resolve LAUNCHER activity for {pkg}. Raw:\n{out}")
+
+    pkg_found, act = m.group(1), m.group(2)
+    # act may be relative (starts with '.'); normalize to FQCN
+    if act.startswith("."):
+        act = pkg_found + act
+    return act
 
 @pytest.fixture(scope="session")
 def driver(ensure_twitch_installed, appium_capabilities) -> Generator[WebDriver, None, None]:
     """
-    Create a single Appium driver session for the whole test session.
-    Assumes Appium 2 server is running at http://127.0.0.1:4723 (no /wd/hub) with base-path "/".
-    Includes small retries to handle transient startup issues.
+    Create a single Appium driver session. Auto-detects correct LAUNCHER activity
+    for the installed Twitch build and injects it into capabilities.
     """
-    # Quick ADB sanity check to fail fast on offline device
-    try:
-        state = subprocess.run(["adb", "get-state"], capture_output=True, text=True, check=True).stdout.strip()
-        if state != "device":
-            pytest.skip(f"ADB state is '{state}', not 'device'")
-    except Exception as e:
-        pytest.skip(f"ADB not available: {e}")
+    # Fast ADB sanity
+    state = subprocess.run(["adb", "get-state"], capture_output=True, text=True, check=True).stdout.strip()
+    if state != "device":
+        pytest.skip(f"ADB state is '{state}', not 'device'")
 
-    # Build options and merge custom capabilities
+    # Make a copy of user caps and patch appActivity via ADB
+    caps = dict(appium_capabilities)
+    pkg = caps.get("appPackage", "tv.twitch.android.app")
+    try:
+        detected_activity = _detect_launcher_activity(pkg)
+    except Exception as e:
+        pytest.fail(f"Failed to detect launcher activity for {pkg}: {e}")
+        raise
+
+    # Force the correct activity + make Appium wait for launch
+    caps["appActivity"] = detected_activity
+    caps.setdefault("appWaitActivity", detected_activity)
+    caps.setdefault("appWaitForLaunch", True)
+
+    # Build options
     opts = UiAutomator2Options()
-    for k, v in appium_capabilities.items():
+    for k, v in caps.items():
         opts.set_capability(k, v)
 
-    server_url = os.getenv("APPIUM_SERVER_URL", "http://127.0.0.1:4723")  # Appium 2 default (no /wd/hub)
+    server_url = os.getenv("APPIUM_SERVER_URL", "http://127.0.0.1:4723")
 
     last_err = None
-    for attempt in range(1, 6):  # up to 5 attempts with backoff
+    for attempt in range(1, 6):
         try:
             drv = WebDriver(command_executor=server_url, options=opts)
-            # Touch the session to ensure it's alive
+            # Touch the session
             _ = drv.current_activity
             break
         except Exception as e:
@@ -130,7 +160,6 @@ def driver(ensure_twitch_installed, appium_capabilities) -> Generator[WebDriver,
         pytest.fail(f"Failed to create Appium session after retries: {last_err}")
 
     yield drv
-
     try:
         drv.quit()
     except Exception:

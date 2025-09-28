@@ -12,5 +12,3 @@ pytest-html>=4.1.1
 
 # Timeout handling for tests
 pytest-timeout>=2.3.1
-
-pytest-env>=1.1.3
