@@ -21,6 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # ✅ HW accel for emulator
       - name: Enable KVM perms (hard)
         run: |
           if [ -e /dev/kvm ]; then
@@ -84,17 +85,25 @@ jobs:
             -no-boot-anim
           disable-animations: true
           script: |
-            # Ensure ADB is clean
+            # Clean ADB and wait for it to show the emulator
             adb kill-server || true
             adb start-server
             adb wait-for-device
             adb devices
 
-            # Wait for full boot
-            until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
+            # Ensure the device is in 'device' state (not 'offline')
+            while ! adb get-state 2>/dev/null | grep -q device; do
+              echo "Waiting for ADB device state == device..."
+              sleep 2
+            done
+
+            # Wait for full Android boot (POSIX sh-safe one-liner)
+            while [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" != "1" ]; do
               echo "Waiting for sys.boot_completed..."
               sleep 2
             done
+
+            # Wake/unlock
             adb shell input keyevent 82
 
             # Install Twitch APK if provided
