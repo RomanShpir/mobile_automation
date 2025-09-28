@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        api-level: ${{ split(github.event.inputs.api_levels, ',') }}
+        api-level: ${{ fromJSON(format('[{0}]', github.event.inputs.api_levels)) }}
         arch: [x86_64]
         target: [google_apis]
 
