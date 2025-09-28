@@ -6,9 +6,9 @@ import tempfile
 import zipfile
 import glob
 import subprocess
-import pytest
-
 from typing import Generator
+
+import pytest
 from appium import webdriver as appium_webdriver
 from appium.options.android import UiAutomator2Options
 from appium.webdriver.webdriver import WebDriver
@@ -37,7 +37,6 @@ def _install_bundle_via_adb(apk_path: str) -> None:
                     parts = sorted(glob.glob(os.path.join(td, "**", "*.apk"), recursive=True))
                     if not parts:
                         raise RuntimeError("Bundle container has no *.apk parts inside.")
-                    # Install all split APKs in one go
                     subprocess.run(["adb", "install-multiple", "-r", *parts], check=True)
                     return
     # Fallback: treat as a single APK
@@ -52,15 +51,13 @@ def ensure_twitch_installed() -> None:
     - Fallback to the repo-local path (REPO_APKM)
     """
     candidates = []
-    # Prefer an explicit path provided via environment (e.g., set by the workflow)
     env_apkm = os.getenv("LOCAL_APKM")
     if env_apkm:
         candidates.append(env_apkm)
-    # Repo fallback
     candidates.append(REPO_APKM)
 
-    pkg = next((p for p in candidates if p and os.path.exists(p)), None)
-    if not pkg:
+    pkg_path = next((p for p in candidates if p and os.path.exists(p)), None)
+    if not pkg_path:
         raise FileNotFoundError(
             "Twitch package not found. Looked for:\n"
             f" - {env_apkm or '(unset)'}\n"
@@ -68,25 +65,31 @@ def ensure_twitch_installed() -> None:
             "Place the .apkm at one of these locations (CI uses the repo path via Git LFS)."
         )
 
-    # Install only if not present
     out = subprocess.run(
         ["adb", "shell", "pm", "list", "packages"],
         capture_output=True, text=True, check=True
     ).stdout
     if "tv.twitch.android.app" not in out:
-        _install_bundle_via_adb(pkg)
+        _install_bundle_via_adb(pkg_path)
 
 
-def appium_capabilities():
+@pytest.fixture(scope="session")
+def appium_capabilities() -> dict:
+    """
+    Base desired capabilities. Do NOT set appActivity here; it will be detected at runtime.
+    """
     return {
         "platformName": "Android",
         "automationName": "UiAutomator2",
         "appPackage": "tv.twitch.android.app",
-        # DO NOT set appActivity here; driver() will detect it at runtime.
         "newCommandTimeout": 180,
         "uiautomator2ServerLaunchTimeout": 120000,
         "adbExecTimeout": 120000,
+        # keep install/launch behavior sane between retries
+        "noReset": True,
+        "dontStopAppOnReset": False,
     }
+
 
 def _detect_launcher_activity(pkg: str) -> str:
     """
@@ -94,7 +97,6 @@ def _detect_launcher_activity(pkg: str) -> str:
     Supports both 'cmp=' output and 'name=' output formats.
     Returns fully qualified activity name.
     """
-    # Try modern/concise resolver
     cmd = [
         "adb", "shell", "cmd", "package", "resolve-activity",
         "-a", "android.intent.action.MAIN",
@@ -115,7 +117,6 @@ def _detect_launcher_activity(pkg: str) -> str:
     m2 = re.search(r"\bname=([A-Za-z0-9_.]+)", out)
     if m2:
         act = m2.group(1)
-        # If somehow it's relative (починається з крапки) – нормалізуємо
         if act.startswith("."):
             act = f"{pkg}{act}"
         return act
@@ -125,7 +126,11 @@ def _detect_launcher_activity(pkg: str) -> str:
 
 @pytest.fixture(scope="session")
 def driver(ensure_twitch_installed, appium_capabilities) -> Generator[WebDriver, None, None]:
-    # Sanity ADB
+    """
+    Create a single Appium driver session for the whole test session.
+    Auto-detects the correct LAUNCHER activity and injects it into capabilities.
+    """
+    # Fast ADB sanity
     state = subprocess.run(["adb", "get-state"], capture_output=True, text=True, check=True).stdout.strip()
     if state != "device":
         pytest.skip(f"ADB state is '{state}', not 'device'")
@@ -135,16 +140,16 @@ def driver(ensure_twitch_installed, appium_capabilities) -> Generator[WebDriver,
     pkg = caps.get("appPackage", "tv.twitch.android.app")
 
     try:
-        detected_activity = _detect_launcher_activity(pkg)  # expected: tv.twitch.android.app.core.LandingActivity
+        detected_activity = _detect_launcher_activity(pkg)  # e.g. tv.twitch.android.app.core.LandingActivity
     except Exception as e:
         pytest.fail(f"Failed to detect launcher activity for {pkg}: {e}")
 
-    # Force correct activity (override if the base caps were wrong)
     caps["appPackage"] = pkg
     caps["appActivity"] = detected_activity
-    # Let's give Appium a more loyal waiting pattern:
+    caps.setdefault("appWaitPackage", pkg)
     caps.setdefault("appWaitActivity", f"{pkg}.*")
-    caps.setdefault("appWaitForLaunch", "true")
+    # IMPORTANT: this must be a boolean, not a string
+    caps.setdefault("appWaitForLaunch", True)
 
     # Build options
     opts = UiAutomator2Options()
@@ -153,20 +158,25 @@ def driver(ensure_twitch_installed, appium_capabilities) -> Generator[WebDriver,
 
     server_url = os.getenv("APPIUM_SERVER_URL", "http://127.0.0.1:4723")
 
-    last_err = None
+    drv: WebDriver | None = None
+    last_err: Exception | None = None
     for attempt in range(1, 6):
         try:
             drv = appium_webdriver.Remote(command_executor=server_url, options=opts)
+            # Touch the session to ensure it's alive
             _ = drv.current_activity
             break
         except Exception as e:
             last_err = e
             time.sleep(2 * attempt)
-    else:
+
+    if drv is None:
         pytest.fail(f"Failed to create Appium session after retries: {last_err}")
 
-    yield drv
     try:
-        drv.quit()
-    except Exception:
-        pass
+        yield drv
+    finally:
+        try:
+            drv.quit()
+        except Exception:
+            pass
