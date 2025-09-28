@@ -1,6 +1,17 @@
 name: Run & Post
+
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      api_levels:
+        description: "Android API levels (JSON array, e.g. [33,34])"
+        type: string
+        required: true
+        default: "[33,34]"
+
+concurrency:
+  group: run-and-post-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   e2e:
@@ -11,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        api-level: [33, 34]
+        api-level: ${{ fromJSON(inputs.api_levels) }}
         arch: [x86_64]
         target: [google_apis]
 
