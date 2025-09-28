@@ -7,7 +7,7 @@ import pytest
 
 
 # Repo-relative fallback (used by CI and can be used locally too)
-WIN_LOCAL_APKM, REPO_APKM = os.path.join("app", "tv.twitch.android.app_26.2.4-2602046_4arch_7dpi_9fc48eed4e73a766d49eb7f8c3737e53_apkmirror.com.apkm")
+REPO_APKM = os.path.join("app", "tv.twitch.android.app_26.2.4-2602046_4arch_7dpi_9fc48eed4e73a766d49eb7f8c3737e53_apkmirror.com.apkm")
 
 
 def _install_bundle_via_adb(apk_path: str) -> None:
@@ -54,7 +54,7 @@ def ensure_twitch_installed() -> None:
     # Try Windows-local path on Windows machines
     candidates = []
     if platform.system().lower().startswith("win"):
-        candidates.append(WIN_LOCAL_APKM)
+        candidates.append(REPO_APKM)
     candidates.append(REPO_APKM)
 
     pkg = None
@@ -66,7 +66,7 @@ def ensure_twitch_installed() -> None:
     if not pkg:
         raise FileNotFoundError(
             "Twitch package not found. "
-            f"Looked for:\n - {WIN_LOCAL_APKM}\n - {REPO_APKM}\n"
+            f"Looked for:\n - {REPO_APKM}\n"
             "Put the .apkm file at one of these locations."
         )
 
