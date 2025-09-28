@@ -15,13 +15,17 @@ jobs:
         arch: [x86_64]
         target: [google_apis]
 
+    # In CI we take the package from the repository (place the file under app/)
     env:
-      TWITCH_APK: ${{ vars.TWITCH_APK }}
+      LOCAL_APKM: app/tv.twitch.android.app_26.2.4-2602046_4arch_7dpi_9fc48eed4e73a766d49eb7f8c3737e53_apkmirror.com.apkm
 
     steps:
+      # ✅ Checkout with LFS enabled, so the .apkm binary is downloaded (not just a pointer)
       - uses: actions/checkout@v4
+        with:
+          lfs: true
 
-      # ✅ HW accel for emulator
+      # ✅ Enable KVM so the emulator can use hardware acceleration
       - name: Enable KVM perms (hard)
         run: |
           if [ -e /dev/kvm ]; then
@@ -47,7 +51,7 @@ jobs:
       - name: (Optional) Assemble your app artifacts
         run: ./gradlew --no-daemon tasks || true
 
-      # Python toolchain
+      # Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -59,14 +63,14 @@ jobs:
           python -V
           pip list
 
-      # Appium server
+      # Appium
       - name: Setup Appium server
         run: |
           npm -g install appium@next appium-uiautomator2-driver
           appium driver install uiautomator2
           nohup appium --base-path / > appium.log 2>&1 &
 
-      # 🧩 create a bash script (to avoid /bin/sh loop problems)
+      # Create a bash script (avoid /bin/sh parsing issues in the action)
       - name: Create boot_and_test.sh
         shell: bash
         run: |
@@ -77,52 +81,40 @@ jobs:
           red()  { echo -e "\033[31m$*\033[0m"; }
           info() { echo "[INFO] $*"; }
 
-          download_app() {
-            local url="$1" out="$2"
-            info "Downloading: $url"
-            curl -L --fail --retry 5 --retry-delay 2 -D /tmp/headers.txt -o "$out" "$url" || {
-              red "Download failed. Response headers:"; cat /tmp/headers.txt || true; return 1; }
-            ls -lh "$out" || true
-            local sz; sz=$(wc -c <"$out" || echo 0)
-            if [ "$sz" -lt 500000 ]; then
-              red "Downloaded file is too small ($sz bytes) — likely HTML/redirect. Headers:"; cat /tmp/headers.txt || true
-              return 1
-            fi
-            local typ; typ=$(file -b "$out" || true)
-            echo "[DEBUG] file(1): $typ"
-            case "$typ" in
-              *Zip*|*Android*|*Dalvik*|*APK*|*Java*|*JAR*) ;; 
-              *) red "Unexpected file type: $typ (likely not an APK/bundle)"; return 1 ;;
-            esac
-          }
-
           install_apk_or_bundle() {
             local path="$1"
+            if [ ! -f "$path" ]; then
+              red "Package not found at: $path"
+              exit 1
+            fi
+            # If the file is zip-compatible it can be either a plain APK (zip) or a container (APKM/APKS/XAPK)
             if unzip -l "$path" >/dev/null 2>&1; then
               if unzip -l "$path" | grep -q "base.apk"; then
-                info "Detected bundle container (XAPK/APKM/APKS). Extracting…"
+                info "Detected bundle container (APKM/APKS/XAPK). Extracting…"
                 rm -rf /tmp/apkparts && mkdir -p /tmp/apkparts
                 unzip -o "$path" -d /tmp/apkparts >/dev/null
                 shopt -s nullglob
                 mapfile -t apks < <(find /tmp/apkparts -maxdepth 3 -type f -name '*.apk' | sort)
                 if [ "${#apks[@]}" -eq 0 ]; then
-                  red "No .apk files found inside the bundle"; return 1
+                  red "No .apk files found inside the bundle"; exit 1
                 fi
                 echo "[DEBUG] bundle parts:"; printf ' - %s\n' "${apks[@]}"
-                # ABI check: emulator is x86/x86_64?
+
+                # Quick ABI check: is the emulator x86/x86_64?
                 if adb shell getprop ro.product.cpu.abi | grep -qi 'x86'; then
-                  if ! printf '%s\n' "${apks[@]}" | grep -qi 'x86'; then
-                    red "No x86/x86_64 split found, but emulator is x86_64. Use an x86_64 variant or run on arm64 emulator."
-                    return 1
+                  if ! printf '%s\n' "${apks[@]}" | grep -qiE 'x86(_64)?'; then
+                    red "Bundle has no x86/x86_64 splits, but emulator is x86_64. Use an x86_64 variant or run on an arm64 emulator."
+                    exit 1
                   fi
                 fi
+
                 adb install-multiple -r "${apks[@]}"
               else
                 info "Installing plain APK…"
                 adb install -r "$path"
               fi
             else
-              info "Installing as plain APK (non-zip reported by file) …"
+              info "Installing as plain APK (non-zip reported by file)…"
               adb install -r "$path"
             fi
           }
@@ -133,7 +125,7 @@ jobs:
           adb wait-for-device
           adb devices
 
-          # 🔁 ADDITIONAL 'device' STATUS CHECK CYCLE AFTER wait-for-device
+          # Additional loop after wait-for-device to ensure state == 'device' (not 'offline')
           echo "[BOOT] Ensure ADB state == device (not offline)"
           for i in $(seq 1 120); do
             state="$(adb get-state 2>/dev/null || true)"
@@ -159,20 +151,15 @@ jobs:
           echo "[BOOT] Wake screen"
           adb shell input keyevent 82 || true
 
-          # ---- Install Twitch if provided ----
-          if [[ -n "${TWITCH_APK:-}" ]]; then
-            info "TWITCH_APK=${TWITCH_APK}"
-            if echo "${TWITCH_APK}" | grep -E "^https?://" >/dev/null; then
-              download_app "${TWITCH_APK}" "/tmp/twitch.pkg"
-              install_apk_or_bundle "/tmp/twitch.pkg"
-            else
-              install_apk_or_bundle "${TWITCH_APK}"
-            fi
+          # Install Twitch from repo-local file
+          if [[ -n "${LOCAL_APKM:-}" ]]; then
+            info "Installing package from repo: ${LOCAL_APKM}"
+            install_apk_or_bundle "${LOCAL_APKM}"
           fi
 
           echo "[CHECK] Verify Twitch package presence"
           if ! adb shell pm list packages | grep -q "tv.twitch.android.app"; then
-            red "Twitch is not installed and TWITCH_APK is not a compatible package."
+            red "Twitch is not installed. Ensure the .apkm is present in repo: ${LOCAL_APKM}"
             exit 1
           fi
 
@@ -182,7 +169,7 @@ jobs:
           chmod +x /tmp/boot_and_test.sh
           ls -l /tmp/boot_and_test.sh
 
-        # Emulator and tests (run the script)
+      # Emulator + tests (invokes the script created above)
       - name: Run tests on Android emulator
         uses: ReactiveCircus/android-emulator-runner@v2
         with:

@@ -1,3 +1,11 @@
-Appium-Python-Client==4.0.0
-pytest==8.3.2
-pytest-timeout==2.3.1
+# Core test runner
+pytest>=7.4.0
+
+# Appium client for Python
+Appium-Python-Client>=3.1.0
+
+# Optional but useful:
+# Parallel test execution
+pytest-xdist>=3.3.1
+# HTML report generation
+pytest-html>=4.1.1
