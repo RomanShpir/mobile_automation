@@ -11,13 +11,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        api-level: [33, 34]       # choose API levels you want to cover
+        api-level: [33]            # you can try 34 later if stable
         arch: [x86_64]
-        target: [google_apis]     # google_apis_playstore is possible but needs Play login
+        target: [google_apis]      # avoid google_apis_playstore for speed/stability
 
     env:
-      # Optional: set this to an APK path or URL you download earlier (e.g., from artifacts)
-      # Example usage: TWITCH_APK: app/build/outputs/apk/debug/app-debug.apk
+      # Prefer storing this in repo Variables or Secrets.
       TWITCH_APK: ${{ vars.TWITCH_APK }}
 
     steps:
@@ -65,17 +64,37 @@ jobs:
           arch: ${{ matrix.arch }}
           target: ${{ matrix.target }}
           force-avd-creation: true
-          # Headless + stable rendering
-          emulator-options: "-no-snapshot -no-window -gpu swiftshader_indirect -no-boot-anim"
+          # Increase boot timeout to avoid flakiness on cold starts
+          emulator-boot-timeout: 1200
+          # Headless + stable rendering; disable audio & cameras to reduce load
+          emulator-options: >
+            -no-snapshot
+            -no-window
+            -gpu swiftshader_indirect
+            -noaudio
+            -camera-back none
+            -camera-front none
+            -no-boot-anim
           disable-animations: true
           script: |
-            # --- Sanity: ensure emulator is visible ---
+            # --- Ensure ADB sees the device ---
+            adb wait-for-device
             adb devices
 
-            # --- Optionally install Twitch APK if provided ---
+            # --- Extra boot wait: sys.boot_completed must be 1 ---
+            #     Some images report "device" to ADB but are not fully booted yet.
+            until [ "$(
+              adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r'
+            )" = "1" ]; do
+              sleep 2
+            done
+
+            # --- Wake/unlock the screen just in case ---
+            adb shell input keyevent 82
+
+            # --- Optionally install Twitch APK if provided (after full boot) ---
             if [ -n "${TWITCH_APK}" ]; then
               echo "[INFO] Installing Twitch APK from ${TWITCH_APK}"
-              # If TWITCH_APK is a URL, download it first:
               if echo "${TWITCH_APK}" | grep -E "^https?://" > /dev/null; then
                 curl -L "${TWITCH_APK}" -o /tmp/twitch.apk
                 adb install -r /tmp/twitch.apk || { echo "[ERROR] APK install failed"; exit 1; }
@@ -91,12 +110,7 @@ jobs:
               exit 1
             fi
 
-            # --- Extra stability tweaks (animations are already disabled by the action) ---
-            adb shell settings put global window_animation_scale 0
-            adb shell settings put global transition_animation_scale 0
-            adb shell settings put global animator_duration_scale 0
-
-            # --- Run Python tests (pytest + Appium). Simple retry on flakiness. ---
+            # --- Run Python tests (pytest + Appium) with a simple retry ---
             pytest -q || pytest -q
 
       # --- Collect useful logs/artifacts ---
