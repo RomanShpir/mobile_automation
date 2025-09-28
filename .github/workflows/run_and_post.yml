@@ -66,7 +66,69 @@ jobs:
           appium driver install uiautomator2
           nohup appium --base-path / > appium.log 2>&1 &
 
-      # Emulator + tests
+      # 🧩 NEW: create bash script in a separate step (bash shell)
+      - name: Create boot_and_test.sh
+        shell: bash
+        run: |
+          cat > /tmp/boot_and_test.sh <<'BASH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          echo "[BOOT] Reset ADB"
+          adb kill-server || true
+          adb start-server
+          adb wait-for-device
+          adb devices
+
+          echo "[BOOT] Wait for ADB state == device"
+          for i in $(seq 1 120); do
+            state="$(adb get-state 2>/dev/null || true)"
+            if [[ "$state" == "device" ]]; then
+              echo "[BOOT] ADB state is device"
+              break
+            fi
+            echo "[BOOT] ADB state=$state; retry $i/120"
+            sleep 2
+          done
+
+          echo "[BOOT] Wait for sys.boot_completed == 1"
+          for i in $(seq 1 180); do
+            boot="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+            if [[ "$boot" == "1" ]]; then
+              echo "[BOOT] sys.boot_completed=1"
+              break
+            fi
+            echo "[BOOT] sys.boot_completed=$boot; retry $i/180"
+            sleep 2
+          done
+
+          echo "[BOOT] Wake screen"
+          adb shell input keyevent 82 || true
+
+          # Optional: install Twitch APK if provided
+          if [[ -n "${TWITCH_APK:-}" ]]; then
+            echo "[APK] Installing Twitch from ${TWITCH_APK}"
+            if echo "${TWITCH_APK}" | grep -E "^https?://" >/dev/null; then
+              curl -L "${TWITCH_APK}" -o /tmp/twitch.apk
+              adb install -r /tmp/twitch.apk
+            else
+              adb install -r "${TWITCH_APK}"
+            fi
+          fi
+
+          echo "[CHECK] Verify Twitch package presence"
+          if ! adb shell pm list packages | grep -q "tv.twitch.android.app"; then
+            echo "[ERROR] Twitch is not installed and TWITCH_APK is not provided."
+            exit 1
+          fi
+
+          echo "[TEST] Run pytest (with one retry)"
+          pytest -q || pytest -q
+          BASH
+          chmod +x /tmp/boot_and_test.sh
+          ls -l /tmp/boot_and_test.sh
+
+      # Emulator + tests (call the script)
       - name: Run tests on Android emulator
         uses: ReactiveCircus/android-emulator-runner@v2
         with:
@@ -84,66 +146,7 @@ jobs:
             -camera-front none
             -no-boot-anim
           disable-animations: true
-          script: |
-            # Write robust bash script and execute it to avoid /bin/sh parsing issues
-            cat > /tmp/boot_and_test.sh <<'BASH'
-            #!/usr/bin/env bash
-            set -euo pipefail
-
-            echo "[BOOT] Reset ADB"
-            adb kill-server || true
-            adb start-server
-            adb wait-for-device
-            adb devices
-
-            echo "[BOOT] Wait for ADB state == device"
-            for i in $(seq 1 120); do
-              state="$(adb get-state 2>/dev/null || true)"
-              if [[ "$state" == "device" ]]; then
-                echo "[BOOT] ADB state is device"
-                break
-              fi
-              echo "[BOOT] ADB state=$state; retry $i/120"
-              sleep 2
-            done
-
-            echo "[BOOT] Wait for sys.boot_completed == 1"
-            for i in $(seq 1 180); do
-              boot="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
-              if [[ "$boot" == "1" ]]; then
-                echo "[BOOT] sys.boot_completed=1"
-                break
-              fi
-              echo "[BOOT] sys.boot_completed=$boot; retry $i/180"
-              sleep 2
-            done
-
-            echo "[BOOT] Wake screen"
-            adb shell input keyevent 82 || true
-
-            # Optional: install Twitch APK if provided
-            if [[ -n "${TWITCH_APK:-}" ]]; then
-              echo "[APK] Installing Twitch from ${TWITCH_APK}"
-              if echo "${TWITCH_APK}" | grep -E "^https?://" >/dev/null; then
-                curl -L "${TWITCH_APK}" -o /tmp/twitch.apk
-                adb install -r /tmp/twitch.apk
-              else
-                adb install -r "${TWITCH_APK}"
-              fi
-            fi
-
-            echo "[CHECK] Verify Twitch package presence"
-            if ! adb shell pm list packages | grep -q "tv.twitch.android.app"; then
-              echo "[ERROR] Twitch is not installed and TWITCH_APK is not provided."
-              exit 1
-            fi
-
-            echo "[TEST] Run pytest (with one retry)"
-            pytest -q || pytest -q
-            BASH
-
-            chmod +x /tmp/boot_and_test.sh
-            bash /tmp/boot_and_test.sh
+          script: bash /tmp/boot_and_test.sh
 
       # Artifacts
       - name: Upload artifacts (Appium/pytest logs)
@@ -155,3 +158,4 @@ jobs:
             appium.log
             .pytest_cache
             **/pytest-*.xml
+            **/reports/**
