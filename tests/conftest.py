@@ -156,7 +156,7 @@ def driver(ensure_twitch_installed, appium_capabilities) -> Generator[WebDriver,
     last_err = None
     for attempt in range(1, 6):
         try:
-            drv = appium_webdriver.WebDriver(command_executor=server_url, options=opts)
+            drv = appium_webdriver.Remote(command_executor=server_url, options=opts)
             _ = drv.current_activity
             break
         except Exception as e:
