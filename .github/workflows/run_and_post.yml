@@ -22,11 +22,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        api-level: ${{ fromJSON(format('[{0}]', replace(inputs.api_levels, ',', ',"'))) }}
+        api-level: ${{ split(github.event.inputs.api_levels, ',') }}
         arch: [x86_64]
         target: [google_apis]
 
-    # In CI we take the package from the repository (place the file under app/)
+    # In CI, we take the package from the repository (place the file under app/)
     env:
       LOCAL_APKM: app/tv.twitch.android.app_26.2.4-2602046_4arch_7dpi_9fc48eed4e73a766d49eb7f8c3737e53_apkmirror.com.apkm
 
