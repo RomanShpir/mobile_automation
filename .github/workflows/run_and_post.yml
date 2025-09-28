@@ -11,18 +11,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        api-level: [33]            # you can try 34 later if stable
+        api-level: [33]
         arch: [x86_64]
-        target: [google_apis]      # avoid google_apis_playstore for speed/stability
+        target: [google_apis]
 
     env:
-      # Prefer storing this in repo Variables or Secrets.
       TWITCH_APK: ${{ vars.TWITCH_APK }}
 
     steps:
       - uses: actions/checkout@v4
 
-      # --- Java / Gradle (keep if you also build your own app artifacts) ---
+      # ✅ Give the runner access to /dev/kvm so emulator can use hardware acceleration
+      - name: Enable KVM perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm || true
+          sudo gpasswd -a $USER kvm
+          groups
+          ls -l /dev/kvm || true
+
+      # Java / Gradle
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -32,11 +41,10 @@ jobs:
       - name: Setup Gradle (with cache)
         uses: gradle/actions/setup-gradle@v4
 
-      # If you don't build your own app, you can remove this step.
       - name: (Optional) Assemble your app artifacts
         run: ./gradlew --no-daemon tasks || true
 
-      # --- Python toolchain for tests ---
+      # Python toolchain
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -48,15 +56,14 @@ jobs:
           python -V
           pip list
 
-      # --- Appium server (Node) ---
+      # Appium server
       - name: Setup Appium server
         run: |
           npm -g install appium@next appium-uiautomator2-driver
           appium driver install uiautomator2
-          # Start Appium in background and log to file
           nohup appium --base-path / > appium.log 2>&1 &
 
-      # --- Start emulator and run tests ---
+      # Emulator + tests
       - name: Run tests on Android emulator
         uses: ReactiveCircus/android-emulator-runner@v2
         with:
@@ -64,9 +71,7 @@ jobs:
           arch: ${{ matrix.arch }}
           target: ${{ matrix.target }}
           force-avd-creation: true
-          # Increase boot timeout to avoid flakiness on cold starts
           emulator-boot-timeout: 1200
-          # Headless + stable rendering; disable audio & cameras to reduce load
           emulator-options: >
             -no-snapshot
             -no-window
@@ -77,22 +82,21 @@ jobs:
             -no-boot-anim
           disable-animations: true
           script: |
-            # --- Ensure ADB sees the device ---
+            # Make sure ADB server is clean/ready
+            adb kill-server || true
+            adb start-server
             adb wait-for-device
             adb devices
 
-            # --- Extra boot wait: sys.boot_completed must be 1 ---
-            #     Some images report "device" to ADB but are not fully booted yet.
+            # Extra boot wait (sometimes ADB is up before full boot)
             until [ "$(
               adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r'
             )" = "1" ]; do
               sleep 2
             done
-
-            # --- Wake/unlock the screen just in case ---
             adb shell input keyevent 82
 
-            # --- Optionally install Twitch APK if provided (after full boot) ---
+            # Optionally install Twitch APK after full boot
             if [ -n "${TWITCH_APK}" ]; then
               echo "[INFO] Installing Twitch APK from ${TWITCH_APK}"
               if echo "${TWITCH_APK}" | grep -E "^https?://" > /dev/null; then
@@ -103,17 +107,16 @@ jobs:
               fi
             fi
 
-            # --- Verify Twitch is installed (required when not providing an APK) ---
+            # Verify Twitch is installed (when no APK provided)
             if ! adb shell pm list packages | grep -q "tv.twitch.android.app"; then
               echo "[ERROR] Twitch is not installed on the emulator and TWITCH_APK is not provided."
-              echo "        Provide TWITCH_APK env var (path or URL) or bake Twitch into the image."
               exit 1
             fi
 
-            # --- Run Python tests (pytest + Appium) with a simple retry ---
+            # Run tests (simple retry)
             pytest -q || pytest -q
 
-      # --- Collect useful logs/artifacts ---
+      # Artifacts
       - name: Upload artifacts (Appium/pytest logs)
         if: always()
         uses: actions/upload-artifact@v4
