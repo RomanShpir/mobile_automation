@@ -1,4 +1,4 @@
-name: android-e2e-python
+name: Run & Post
 
 jobs:
   e2e:
