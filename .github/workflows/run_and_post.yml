@@ -68,7 +68,8 @@ jobs:
         run: |
           npm -g install appium@next appium-uiautomator2-driver
           appium driver install uiautomator2
-          nohup appium --base-path / > appium.log 2>&1 &
+          # Allow mobile: shell via Appium (only if you need it)
+          nohup appium --base-path / --allow-insecure=adb_shell > appium.log 2>&1 &
 
       # Create a bash script (avoid /bin/sh parsing issues in the action)
       - name: Create boot_and_test.sh
