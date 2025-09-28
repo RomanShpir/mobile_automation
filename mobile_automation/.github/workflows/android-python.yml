@@ -1,0 +1,110 @@
+name: android-e2e-python
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        api-level: [33, 34]       # choose API levels you want to cover
+        arch: [x86_64]
+        target: [google_apis]     # google_apis_playstore is possible but needs Play login
+
+    env:
+      # Optional: set this to an APK path or URL you download earlier (e.g., from artifacts)
+      # Example usage: TWITCH_APK: app/build/outputs/apk/debug/app-debug.apk
+      TWITCH_APK: ${{ vars.TWITCH_APK }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- Java / Gradle (keep if you also build your own app artifacts) ---
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle (with cache)
+        uses: gradle/actions/setup-gradle@v4
+
+      # If you don't build your own app, you can remove this step.
+      - name: (Optional) Assemble your app artifacts
+        run: ./gradlew --no-daemon tasks || true
+
+      # --- Python toolchain for tests ---
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python deps
+        run: |
+          pip install -r requirements.txt
+          python -V
+          pip list
+
+      # --- Appium server (Node) ---
+      - name: Setup Appium server
+        run: |
+          npm -g install appium@next appium-uiautomator2-driver
+          appium driver install uiautomator2
+          # Start Appium in background and log to file
+          nohup appium --base-path / > appium.log 2>&1 &
+
+      # --- Start emulator and run tests ---
+      - name: Run tests on Android emulator
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          arch: ${{ matrix.arch }}
+          target: ${{ matrix.target }}
+          force-avd-creation: true
+          # Headless + stable rendering
+          emulator-options: "-no-snapshot -no-window -gpu swiftshader_indirect -no-boot-anim"
+          disable-animations: true
+          script: |
+            # --- Sanity: ensure emulator is visible ---
+            adb devices
+
+            # --- Optionally install Twitch APK if provided ---
+            if [ -n "${TWITCH_APK}" ]; then
+              echo "[INFO] Installing Twitch APK from ${TWITCH_APK}"
+              # If TWITCH_APK is a URL, download it first:
+              if echo "${TWITCH_APK}" | grep -E "^https?://" > /dev/null; then
+                curl -L "${TWITCH_APK}" -o /tmp/twitch.apk
+                adb install -r /tmp/twitch.apk || { echo "[ERROR] APK install failed"; exit 1; }
+              else
+                adb install -r "${TWITCH_APK}" || { echo "[ERROR] APK install failed"; exit 1; }
+              fi
+            fi
+
+            # --- Verify Twitch is installed (required when not providing an APK) ---
+            if ! adb shell pm list packages | grep -q "tv.twitch.android.app"; then
+              echo "[ERROR] Twitch is not installed on the emulator and TWITCH_APK is not provided."
+              echo "        Provide TWITCH_APK env var (path or URL) or bake Twitch into the image."
+              exit 1
+            fi
+
+            # --- Extra stability tweaks (animations are already disabled by the action) ---
+            adb shell settings put global window_animation_scale 0
+            adb shell settings put global transition_animation_scale 0
+            adb shell settings put global animator_duration_scale 0
+
+            # --- Run Python tests (pytest + Appium). Simple retry on flakiness. ---
+            pytest -q || pytest -q
+
+      # --- Collect useful logs/artifacts ---
+      - name: Upload artifacts (Appium/pytest logs)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-appium-logs-api-${{ matrix.api-level }}
+          path: |
+            appium.log
+            .pytest_cache
+            **/pytest-*.xml
+            **/reports/**

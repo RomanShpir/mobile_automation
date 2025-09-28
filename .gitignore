@@ -14,7 +14,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+mobile_automation/library/
 lib64/
 parts/
 sdist/
