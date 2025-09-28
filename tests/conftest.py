@@ -13,6 +13,9 @@ from appium import webdriver as appium_webdriver
 from appium.options.android import UiAutomator2Options
 from appium.webdriver.webdriver import WebDriver
 
+from pathlib import Path
+from datetime import datetime
+
 # Repo-relative fallback path (used in CI with Git LFS)
 REPO_APKM = os.path.join(
     "app",
@@ -180,3 +183,46 @@ def driver(ensure_twitch_installed, appium_capabilities) -> Generator[WebDriver,
             drv.quit()
         except Exception:
             pass
+
+# --- screenshots on failure ----------------------------------------------------
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_runtest_makereport(item, call):
+    """
+    Make test report info (rep_setup/rep_call/rep_teardown) available on item.
+    This lets fixtures check if a test failed.
+    """
+    outcome = yield
+    rep = outcome.get_result()
+    setattr(item, f"rep_{rep.when}", rep)
+
+@pytest.fixture(autouse=True)
+def _screenshot_on_fail(request, driver: WebDriver):
+    """
+    Automatically take a screenshot if a test fails.
+    Works for failures in setup or during the test body.
+    """
+    yield  # run the test
+    # after test, check the outcome
+    take = False
+    rep_call = getattr(request.node, "rep_call", None)
+    rep_setup = getattr(request.node, "rep_setup", None)
+    if rep_setup and rep_setup.failed:
+        take = True
+    if rep_call and rep_call.failed:
+        take = True
+
+    if take:
+        # ensure output dir exists
+        out_dir = Path("reports") / "screenshots"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # filename: <testname>__YYYYmmdd-HHMMSS.png
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        safe_name = request.node.name.replace(os.sep, "_").replace(" ", "_")
+        png_path = out_dir / f"{safe_name}__{ts}.png"
+
+        try:
+            driver.get_screenshot_as_file(str(png_path))
+            print(f"[SCREENSHOT] saved to {png_path}")
+        except Exception as e:
+            print(f"[SCREENSHOT] failed: {e}")
