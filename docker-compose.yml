@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  appium-server:
+    build: .
+    container_name: appium-android-server
+    ports:
+      - "4723:4723"
+      - "5900:5900"  # VNC port for viewing emulator
+    environment:
+      - DISPLAY=:0
+      - ANDROID_AVD=android_emulator
+    volumes:
+      - ./apps:/opt/apps:ro  # Mount directory for test APKs
+      - ./reports:/opt/reports  # Mount directory for test reports
+    privileged: true
+    devices:
+      - /dev/kvm:/dev/kvm  # Required for hardware acceleration
+    networks:
+      - mobile-automation-network
+
+networks:
+  mobile-automation-network:
+    driver: bridge
