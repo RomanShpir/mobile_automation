@@ -8,6 +8,11 @@ on:
         type: string
         required: true
         default: "34"
+      device_profile:
+        description: "Emulator device profile (e.g. pixel_5, pixel_6, Nexus 6)"
+        type: string
+        required: true
+        default: "pixel_5"
 
 concurrency:
   group: run-and-post-${{ github.ref }}
@@ -188,6 +193,7 @@ jobs:
           api-level: ${{ matrix.api-level }}
           arch: ${{ matrix.arch }}
           target: ${{ matrix.target }}
+          profile: ${{ github.event.inputs.device_profile }}
           force-avd-creation: true
           emulator-boot-timeout: 1200
           emulator-options: >
