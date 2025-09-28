@@ -7,7 +7,7 @@ on:
         description: "Android API levels (comma-separated, e.g. 33,34)"
         type: string
         required: true
-        default: "33,34"
+        default: "34"
 
 concurrency:
   group: run-and-post-${{ github.ref }}
