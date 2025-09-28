@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       api_levels:
-        description: "Android API levels (JSON array, e.g. [33,34])"
+        description: "Android API levels (comma-separated, e.g. 33,34)"
         type: string
         required: true
-        default: "[33,34]"
+        default: "33,34"
 
 concurrency:
   group: run-and-post-${{ github.ref }}
@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        api-level: ${{ fromJSON(inputs.api_levels) }}
+        api-level: ${{ fromJSON(format('[{0}]', replace(inputs.api_levels, ',', ',"'))) }}
         arch: [x86_64]
         target: [google_apis]
 
