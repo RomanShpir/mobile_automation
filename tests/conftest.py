@@ -187,13 +187,19 @@ def driver(ensure_twitch_installed, appium_capabilities) -> Generator[WebDriver,
 # --- screenshots on failure ----------------------------------------------------
 @pytest.hookimpl(hookwrapper=True, tryfirst=True)
 def pytest_runtest_makereport(item, call):
-    """
-    Make test report info (rep_setup/rep_call/rep_teardown) available on item.
-    This lets fixtures check if a test failed.
-    """
     outcome = yield
     rep = outcome.get_result()
-    setattr(item, f"rep_{rep.when}", rep)
+    if rep.when == "call" and rep.failed:
+        drv = item.funcargs.get("driver")
+        if drv:
+            os.makedirs("tests/_artifacts", exist_ok=True)
+            name = re.sub(r"[^A-Za-z0-9_.-]", "_", item.name)
+            path = os.path.join("tests/_artifacts", f"{name}.png")
+            try:
+                drv.save_screenshot(path)
+                print(f"[ARTIFACT] Saved screenshot: {path}")
+            except Exception as e:
+                print(f"[ARTIFACT] Failed to save screenshot: {e}")
 
 @pytest.fixture(autouse=True)
 def _screenshot_on_fail(request, driver: WebDriver):
