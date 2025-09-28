@@ -1,0 +1,32 @@
+{
+  "android": {
+    "platformName": "Android",
+    "platformVersion": "9.0",
+    "deviceName": "Android Emulator",
+    "automationName": "UiAutomator2",
+    "appPackage": "",
+    "appActivity": "",
+    "newCommandTimeout": 300,
+    "connectHardwareKeyboard": true,
+    "noReset": false,
+    "fullReset": false,
+    "unicodeKeyboard": true,
+    "resetKeyboard": true,
+    "systemPort": 8200,
+    "chromeDriverPort": 8000,
+    "ensureWebviewsHavePages": true,
+    "nativeWebScreenshot": true,
+    "androidInstallTimeout": 90000
+  },
+  "appium_server": {
+    "host": "localhost",
+    "port": 4723,
+    "command_executor": "http://localhost:4723/wd/hub"
+  },
+  "test_settings": {
+    "implicit_wait": 10,
+    "explicit_wait": 30,
+    "screenshot_on_failure": true,
+    "video_recording": false
+  }
+}
